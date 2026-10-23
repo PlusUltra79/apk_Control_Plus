@@ -1,0 +1,71 @@
+name: Compilar APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Aceptar licencias del Android SDK (ya viene instalado)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Crear proyecto Android desde cero
+        run: |
+          rm -rf android
+          npx cap add android
+
+      - name: Ícono, pantalla de inicio y versión
+        run: |
+          cp -r android-res/. android/app/src/main/res/
+          CODE=$((100 + GITHUB_RUN_NUMBER))
+          sed -i "s/versionCode 1$/versionCode $CODE/; s/versionName \"1.0\"/versionName \"2.$GITHUB_RUN_NUMBER\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
+      - name: Firma (tu debug.keystore)
+        run: |
+          mkdir -p ~/.android
+          if [ -f debug.keystore ]; then
+            cp debug.keystore ~/.android/debug.keystore
+            echo "Usando el debug.keystore del repositorio: el APK se instalará encima del anterior."
+          else
+            echo "::warning::No hay debug.keystore en el repositorio. Se creará una llave NUEVA y Android no dejará instalar encima de la app anterior."
+          fi
+
+      - name: Compilar APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Huella de la llave usada
+        run: keytool -list -keystore ~/.android/debug.keystore -storepass android | tail -2
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: controlplus-cco-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Guardar llave nueva (solo si no tenías una)
+        if: ${{ hashFiles('debug.keystore') == '' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: debug-keystore-NUEVA-guardala
+          path: ~/.android/debug.keystore
